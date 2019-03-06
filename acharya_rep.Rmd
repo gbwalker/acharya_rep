@@ -3,6 +3,7 @@ title: "Replication: The Political Legacy of American Slavery"
 output:
   pdf_document:
     md_extension: +raw_tex
+bibliography: citations.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -20,6 +21,7 @@ library(lme4)
 library(cem)
 library(latticeExtra)
 library(stringr)
+library(bookdown)
 
 # A library with custom functions.
 
@@ -82,6 +84,11 @@ Gabe Walker
 
 March 6, 2019
 \end{flushright}
+
+### Abstract
+
+I partially replicate "The Political Legacy of American Slavery" by @acharya from @data. The main regression results (Tables 1-3) appear as in the original paper. Some of the figures either cannot be replicated without further guidance (Fig. 1), take too long to knit (Fig. 3), or require additional data (Fig. 6). I include more detailed comments about the statistical methods the authors used in the comments of this file.
+
 
 ```{r data, echo=FALSE, message=FALSE, warning=FALSE, error = FALSE, cache = TRUE}
 ### Work with the initial data.
@@ -195,6 +202,84 @@ base.first.form <- formula(pslave1860 ~ cottonsuit + log(coarea00) + rugged + la
 rform.form <- formula(. ~  cottonsuit + log(coarea00) + rugged + latitude + I(latitude^2)+ longitude + I(longitude^2)  + water1860+  state.abb)
 
 ```
+
+### Figure 1. Estimated proportion slave in 1860 by county.
+
+This figure is missing a necessary dataframe (counties2000) with no explanation about where it came from.
+
+```{r echo = FALSE, message=FALSE, error=FALSE, warning=FALSE, eval = FALSE}
+library(raster)
+library(rgdal)
+library(rgeos)
+library(plyr)
+library(reshape)
+library(ineq)
+library(maps)
+library(maptools)
+library(foreign)
+library(RColorBrewer)
+library(classInt)
+
+data(state.fips)
+state.fips <- unique(state.fips[,c("fips","abb")])
+state.fips$abb <- as.character(state.fips$abb)
+state.fips <- rbind(state.fips, c(2, "AK"))
+state.fips <- rbind(state.fips, c(15, "HI"))
+rownames(state.fips) <- state.fips$abb
+fips.state <- state.fips
+rownames(fips.state) <- fips.state$fips
+data(county.fips)
+
+## The following data, which is required to produce the graph, is here:
+## http://publications.newberry.org/ahcbp/
+histstates <- readOGR("data/US_AtlasHCB_StateTerr_Gen001/US_HistStateTerr_Gen001_Shapefile", layer = "US_HistStateTerr_Gen001")
+
+ss2000 <- which(histstates$START_N <= 20001231 & histstates$END_N >= 20001231)
+states2000 <- histstates[ss2000,]
+states2000 <- states2000[!(states2000$ABBR_NAME %in% c("AK", "HI")),]
+
+# load("census1860-interp.RData")
+southern.states <- c("Alabama", "Arkansas", "Florida", "Georgia", "Kentucky", "Louisiana",
+                      "Mississippi", "Missouri", "North Carolina", "South Carolina", "Tennessee", "Texas",
+                     "Virginia", "West Virginia")
+
+# counties1860 <- merge(counties1860, census1860, by = "fips")
+# counties1850 <- merge(counties1850, census1850, by = "fips")
+
+pslave.bins <- cut(counties2000$pslave1860, breaks = seq(0,1, length = 6))
+pslave1850.bins <- cut(counties2000$pslave1850, breaks = seq(0,1, length = 6))
+pslave1840.bins <- cut(counties2000$pslave1840, breaks = seq(0,1, length = 6))
+mcols <-  c("#F1EEF6", "#D4B9DA", "#C994C7", "#DF65B0", "#DD1C77", "#980043")
+leg.text <- c("0-20%", "21-40%", "41-60%", "61-80%", "81-100%")
+names(mcols) <- levels(pslave.bins)
+
+#cairo_pdf(file = "figs/pslave2000-map.pdf", width = 7, height = 4, pointsize = 8, family = "Minion Pro")
+plot(counties2000[counties2000$STATE_TERR %in% southern.states,], col = mcols[pslave.bins[counties2000$STATE_TERR %in% southern.states]], border = NA)
+plot(states2000[states2000$FULL_NAME %in% southern.states,], border = "grey30", add = TRUE, lwd = 0.25)
+legend("topleft", horiz = FALSE, col = mcols, legend =  leg.text, bty = "n", fill = mcols, border = "white")
+#dev.off()
+
+# countydata <- read.csv("data/abs-jop-countydata.csv", stringsAsFactors = FALSE)
+
+cotton.bins <- cut(countydata$cottonsuit, breaks = quantile(countydata$cottonsuit, c(0, 0.4, 0.5, 0.6, 0.7, 0.8, 1), na.rm=TRUE))
+mcols <- brewer.pal(6, "Greens")
+#leg.text <- c("0-20%", "21-40%", "41-60%", "61-80%", "81-100%")
+names(mcols) <- levels(cotton.bins)
+
+tmp.data <- data.frame(fips = countydata$fips, cotton.cols = as.character(mcols[cotton.bins]))
+mp <- map("county", plot=FALSE,namesonly=TRUE)
+tmp.data <- merge(county.fips, tmp.data, by = "fips", all.x = TRUE)
+rownames(tmp.data) <- tmp.data$polyname
+
+#cairo_pdf(file = "figs/cotton-suit-map.pdf", width = 7, height = 4, pointsize = 8, family = "Minion Pro")
+map("county", fill = TRUE, col = as.character(tmp.data[mp, "cotton.cols"]),resolution = 0,lty = 0,projection = "polyconic")
+#points(x = -92, y = 34, pch = 19, cex = 2)
+map("state",col = "black",fill=FALSE,add=TRUE,lty=1,lwd=1,projection="polyconic")
+legend("bottomleft", legend = c("Least Suitable", NA, NA, NA, NA, "Most Suitable"), fill = mcols, bty = "o", border = NA, y.intersp = 0.5, bg = grey(0.8), box.lwd = 0)
+#dev.off()
+
+```
+
 
 
 ### Figure 2. Bivariate relationships between proportion slave in 1860 and the four outcome measures with a linear fit.
@@ -898,3 +983,51 @@ text(x = 2008, y = 25*coef(obama.iv)["pslave1860"], "Obama\n2008", pos = 4)
 ##dev.off()
 ```
 
+### Figure 5. Within-state relationship between proportion slave in 1850 in a county and percentage voting for Unionist candidates in 1851 in that county.
+
+```{r echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+### Figure 5.
+
+ga.votes <- read.csv("data/ga-votes-1824-1860.csv", stringsAsFactors = FALSE)
+ga.votes$cfips <- strtrim(ga.votes$V3, nchar(ga.votes$V3)-1)
+ga.votes$fips <- as.numeric(paste(13, str_pad(ga.votes$cfips, 3, side = "left", pad = "0"), sep = ""))
+is.na(ga.votes) <- ga.votes == 9999999
+ga.votes$howell1851 <- ga.votes$V345/ga.votes$V348
+
+ga.votes <- merge(ga.votes, countydata, by = "fips", all.x = TRUE, all.y = FALSE)
+
+# lattice::xyplot(howell1851 ~ sprop1850, data = ga.votes, subset = state.abb %in% st.list , pch = 16, lwd = 4, col.line = "indianred", col = dodgerblue.30, xlab = "Proportion Slave, 1850", ylab = "Howell Cobb Vote-share, 1851", panel =
+#                     function(x,y,...) {  panel.xyplot(x, y, ...)
+#                                          panel.smoother(x,y,method = "loess", col = "indianred", lwd = 4)})
+
+ms.votes <- read.csv("data/ms-votes-1824-1860.csv", stringsAsFactors = FALSE)
+ms.votes$cfips <- strtrim(ms.votes$V3, nchar(ms.votes$V3)-1)
+ms.votes$fips <- as.numeric(paste(28, str_pad(ms.votes$cfips, 3, side = "left", pad = "0"), sep = ""))
+is.na(ms.votes) <- ms.votes == 9999999
+ms.votes$foote1851 <- ms.votes$V187/ms.votes$V190
+
+ms.votes <- merge(ms.votes, countydata, by = "fips", all.x = TRUE, all.y = FALSE)
+
+# lattice::xyplot(foote1851 ~ sprop1850, data = ms.votes, subset = state.abb %in% st.list , pch = 16, lwd = 4, col.line = "indianred", col = dodgerblue.30, xlab = "Proportion Slave, 1850", ylab = "Henry Foote Vote-share, 1851", panel =
+#                     function(x,y,...) {  panel.xyplot(x, y, ...)
+#                                          panel.smoother(x,y,method = "loess", col = "indianred", lwd = 4)})
+
+#cairo_pdf(filename = "figs/ms-ga-1851-vote.pdf", family = "Minion Pro", height = 4.5, width = 9, pointsize = 11)
+p1 <- lattice::xyplot(howell1851 ~ sprop1850, data = ga.votes, subset = state.abb %in% st.list , pch = 16, lwd = 4, ylim = c(0,1), col.line = "indianred", main = "Georgia Gubernatorial Election, 1851", col = dodgerblue.30, xlab = "Proportion Slave, 1850", ylab = "Howell Cobb Vote-share, 1851", panel =
+                    function(x,y,...) {  panel.xyplot(x, y, ...)
+                                         panel.smoother(x,y,method = "loess", col = "indianred", lwd = 4)})
+p2 <- lattice::xyplot(foote1851 ~ sprop1850, data = ms.votes, subset = state.abb %in% st.list , pch = 16, lwd = 4, ylim = c(0,1), col.line = "indianred", main = "Mississippi Gubernatorial Election, 1851", col = dodgerblue.30, xlab = "Proportion Slave, 1850", ylab = "Henry Foote Vote-share, 1851", panel =
+                    function(x,y,...) {  panel.xyplot(x, y, ...)
+                                         panel.smoother(x,y,method = "loess", col = "indianred", lwd = 4)})
+plot(p1, more = TRUE)
+```
+```{r echo = FALSE}
+plot(p2)
+```
+
+
+### Figure 6. Correlation coefficients between parent’s white racial preference in 1965 and their children’s white racial preference measured at four time periods: 1965, 1973, 1982, and 1997.
+
+Cannot be replicated by data on the Harvard Dataverse. Register and download *Three Generations Combined, 1965-1997 (ICPSR 4532)* [here](http://www.icpsr.umich.edu/icpsrweb/ICPSR/studies/4532) to replicate it.
+
+### References
