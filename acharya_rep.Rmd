@@ -1,0 +1,283 @@
+---
+title: "Replication: The Political Legacy of American Slavery"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(foreign)
+library(plyr)
+library(reshape)
+library(sandwich)
+library(maps)
+library(stargazer)
+library(AER)
+library(Formula)
+library(lme4)
+library(cem)
+library(latticeExtra)
+library(stringr)
+
+# A library with custom functions.
+
+source("data/panel-utils.R")
+
+# Two more custom functions.
+# http://people.su.se/~ma/clustering.pdf
+
+robust.se <- function(fm, clvar){
+    # R-codes (www.r-project.org) for computing
+    # clustered-standard errors. Mahmood Arai, Jan 26, 2008.
+    # The arguments of the function are:
+    # fitted model, cluster1 and cluster2
+    # You need to install libraries `sandwich' and `lmtest'
+  library(sandwich);library(lmtest);
+  x <- eval(fm$call$data, envir = parent.frame())
+  if ("polr" %in% class(fm)) {
+    require(MASS)
+    cluster <- x[rownames(predict(fm, type = "probs")), clvar]
+  } else {
+    cluster <- x[names(predict(fm)), clvar]
+  }
+  M <- length(unique(cluster))
+  N <- length(cluster)
+  K <- dim(vcov(fm))[1]
+  dfc <- (M/(M-1))*((N-1)/(N-K))
+  uj  <- apply(estfun(fm),2, function(x) tapply(x, cluster, sum));
+  vcovCL <- dfc*sandwich(fm, meat=crossprod(uj)/N)
+  coeftest(fm, vcovCL)
+}
+
+ch.row <- function(name, yesno) {
+    c(name, ifelse(yesno, "$\\checkmark$", ""))
+}
+
+# Federal Information Processing codes for states.
+
+data(state.fips)
+state.fips <- unique(state.fips[,c("fips","abb")])
+state.fips$abb <- as.character(state.fips$abb)
+state.fips <- rbind(state.fips, c(2, "AK"))
+state.fips <- rbind(state.fips, c(15, "HI"))
+rownames(state.fips) <- state.fips$abb
+fips.state <- state.fips
+rownames(fips.state) <- fips.state$fips
+
+# FIPs for counties.
+
+data(county.fips)
+
+# Custom colors.
+
+dodgerblue.30 <- rgb(30, 144, 255, 76.5, max =255)
+indianred.30 <- rgb(205, 92, 92, 76.5, max =255)
+indianred.75 <- rgb(205, 92, 92, 191, max =255)
+```
+
+\begin{flushright}
+Gabe Walker
+
+March 6, 2019
+\end{flushright}
+
+```{r data, echo=FALSE, message=FALSE, warning=FALSE, error = FALSE, cache = TRUE}
+### Work with the initial data.
+
+## Read in three datasets.
+
+# CCES is the Cooperative Congressional Election Study. The researchers used pooled data from 2006 to 2011
+# and subset it to include whites from 1,329 southern counties.
+# NES is the National Election Survey. The researchers used 1984-1998 black/white thermometer scores from
+# 3,123 individuals in 64 southern counties.
+
+# The first is county-level data with no CCES or NES data merged.
+# The second is county-level data with aggregated white CCES responses merged.
+# The third is individual-level CCES data with county variables merged.
+
+# N.B. the third csv is not included on Github due to file size constraints.
+# Instead, download it here: https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/CAEEG7
+
+countydata <- read.csv("data/abs-jop-countydata.csv", stringsAsFactors = FALSE)
+wh.counties <- read.csv("data/abs-jop-cces-white-countydata.csv", stringsAsFactors = FALSE)
+cces.comb <- read.csv("data/abs-jop-cces-ind.csv", stringsAsFactors = FALSE)
+
+# Make a list of only the states of interest.
+
+st.list <- c("AL", "AR", "GA", "FL", "KY", "LA", "MS", "MO", "NC", "SC", "TN", "TX", "VA","WV")
+
+# This "subsets" the three datasets listed above by making a new dummy variable
+# if the state is in the state list. An awful way to subset.
+
+cces.comb$abs.sample <- 1 * (cces.comb$state.abb %in% st.list)
+wh.counties$abs.sample <- 1 * (wh.counties$state.abb %in% st.list)
+countydata$abs.sample <- 1 * (countydata$state.abb %in% st.list)
+
+# This calculates the tractor growth per county-acre from 1930 to 1940.
+
+wh.counties$tractor.growth <- (wh.counties$tractors40 - wh.counties$tractors30)
+
+# This creates an income category in the survey results (cces.comb) and
+# subsets of the survey data by race.
+
+cces.comb$inc.cat <- factor(cces.comb$inc.cat, levels = c("<20k", "20-50k", "50-100k", "100-150k", "150k+"))
+whites <- cces.comb[which(cces.comb$white == 1),]
+blacks <- cces.comb[which(cces.comb$black == 1),]
+latinos <- cces.comb[which(cces.comb$latino == 1),]
+others <- cces.comb[which(cces.comb$white != 1 & cces.comb$black != 1 & cces.comb$latino != 1),]
+
+# This creates a subset of survey results by race for the states of interest,
+# using the dummy created above (abs.sample).
+
+southerners <- subset(cces.comb, abs.sample == 1)
+s.whites <- subset(whites, abs.sample == 1)
+s.blacks <- subset(blacks, abs.sample == 1)
+s.latinos <- subset(latinos, abs.sample == 1)
+s.whites$state.abb <- factor(s.whites$state.abb)
+s.blacks$state.abb <- factor(s.blacks$state.abb)
+s.latinos$state.abb <- factor(s.latinos$state.abb)
+
+# This creates a subset of survey data from southern counties.
+
+south.counties <- subset(wh.counties, abs.sample == 1)
+south.counties$state.abb <- factor(south.counties$state.abb)
+south.counties <- south.counties[order(as.numeric(south.counties$fips)),]
+
+# Read in county-level data with aggregated white NES responses merged.
+# Read in individual-level NES data with county variables merged.
+
+nes.counties <- read.csv("data/abs-jop-nes-white-countydata.csv", stringsAsFactors = FALSE)
+nes.comb <- read.csv("data/abs-jop-nes-ind.csv", stringsAsFactors = FALSE)
+
+# Make a dummy variable for states of interest.
+
+nes.counties$abs.sample <- 1 * (nes.counties$state.abb %in% st.list)
+nes.comb$abs.sample <- 1 * (nes.comb$state.abb %in% st.list)
+
+# Make subset groups for whites and blacks.
+
+nes.whites <- nes.comb[which(nes.comb$white == 1),]
+nes.blacks <- nes.comb[which(nes.comb$black == 1),]
+
+# Make ANOTHER subset of whites and blacks from the southern states of interest.
+# Hashtag too many dataframes floating around.
+
+ns.whites <- subset(nes.whites, abs.sample == 1)
+ns.blacks <- subset(nes.blacks, abs.sample == 1)
+
+# Factor the state names to make sure they're not strings.
+
+ns.whites$state.abb <- factor(ns.whites$state.abb)
+ns.blacks$state.abb <- factor(ns.blacks$state.abb)
+```
+
+```{r regressions1, echo=FALSE, message=FALSE, warning=FALSE, error = FALSE}
+### Set up some formulas.
+
+# Formulas with many, many parameters.
+
+base1860.form <- formula(. ~ pslave1860 + log(coarea00) + latitude + I(latitude^2) + longitude + I(longitude^2)+ rugged  + land.ineq1860 + sfarmprop1860 + log(totpop1860) + log(fvalpac1860) + log(acimp1860) + fbprop1860  + rail1860 + water1860 + state.abb)
+
+ind.form <- formula(. ~ pslave1860 + log(coarea00) + latitude + I(latitude^2) + longitude + I(longitude^2) + rugged + land.ineq1860 + sfarmprop1860 + log(totpop1860) + log(fvalpac1860) + log(acimp1860) + fbprop1860 + rail1860 + water1860 + as.factor(educ) +  inc.cat +religion + female + age + state.abb*as.factor(year))
+
+ind.int.form <- formula(. ~ pslave1860   + log(coarea00) + latitude + I(latitude^2) + longitude + I(longitude^2) + rugged + land.ineq1860 + sfarmprop1860 + log(totpop1860) + log(fvalpac1860) + log(acimp1860) + fbprop1860 + rail1860 + water1860 + as.factor(educ)*pslave1860 + inc.cat*pslave1860 + religion*pslave1860 + female*pslave1860 + age*pslave1860  + state.abb*as.factor(year))
+
+context.form <- formula(. ~ pslave1860   + log(coarea00) + latitude + I(latitude^2) + longitude + I(longitude^2) + rugged + land.ineq1860 + sfarmprop1860 + log(totpop1860) + log(fvalpac1860) + log(acimp1860) + fbprop1860 + rail1860 + water1860 + as.factor(educ) + inc.cat  +religion +female + age + blkprop.z00 + log(medinc.z10) + w.unemp.rate2014 + log(wbincratio2014) + state.abb*as.factor(year))
+
+context.int.form <- formula(. ~ pslave1860   + log(coarea00) + latitude + I(latitude^2) + longitude + I(longitude^2) + rugged + land.ineq1860 + sfarmprop1860 + log(totpop1860) + log(fvalpac1860) + log(acimp1860) + fbprop1860 + rail1860 + water1860 + as.factor(educ) +  inc.cat  +religion +female + age + blkprop.z00*pslave1860 + log(medinc.z10)*pslave1860 + w.unemp.rate2014*pslave1860 + log(wbincratio2014)*pslave1860 + state.abb*as.factor(year))
+
+base.iv.form <- Formula(. ~ pslave1860 + log(coarea00) + rugged + latitude + I(latitude^2) + longitude + I(longitude^2)  + water1860  + state.abb | cottonsuit + log(coarea00) + rugged  + latitude + I(latitude^2) + longitude + I(longitude^2) + water1860  + state.abb)
+
+base.first.form <- formula(pslave1860 ~ cottonsuit + log(coarea00) + rugged + latitude + I(latitude^2) + longitude + I(longitude^2)  +water1860 + state.abb)
+
+rform.form <- formula(. ~  cottonsuit + log(coarea00) + rugged + latitude + I(latitude^2)+ longitude + I(longitude^2)  + water1860+  state.abb)
+
+```
+
+
+## Figure 2.
+
+```{r figure2, echo = FALSE}
+### Make figure 2.
+
+par(mfrow = c(1,4), mar = 0.1 + c(4, 3, 2, 0.5), cex.main = 1)
+plot(south.counties$pslave1860, south.counties$dem, pch = 19, col = "#33333333", xlab = "Proportion Slave, 1860", ylab = "", main = "Proportion Democrat", yaxt = "n", cex = south.counties$sample.size/100)
+axis(side = 2, las = 2)
+abline(lm(dem ~ pslave1860, data = south.counties, weights = sample.size), lwd = 2, col = "#AA0000")
+plot(south.counties$pslave1860, south.counties$affirm, pch = 19, col = "#33333333", xlab = "Proportion Slave, 1860", ylab = "", main = "Affirmative Action", yaxt = "n", cex = south.counties$sample.size/100)
+axis(side = 2, las = 2)
+abline(lm(affirm ~ pslave1860, data = south.counties, weights = sample.size), lwd = 2, col = "#AA0000")
+plot(south.counties$pslave1860, south.counties$resent, pch = 19, col = "#33333333", xlab = "Proportion Slave, 1860", ylab="", main = "Racial Resentment", yaxt = "n", cex = south.counties$sample.size.res/75)
+axis(side = 2, las = 2)
+abline(lm(resent ~ pslave1860, data = south.counties, weights = sample.size.res), lwd = 2, col = "#AA0000")
+with(subset(nes.counties, state.abb %in% st.list), plot(pslave1860, wtherm-btherm, cex = sample.size.bt/40, pch = 19, col = "#33333333", xlab = "Proportion Slave, 1860", ylab = "", main = "White - Black Therm. Score", las = 1, xlim = c(0, 0.9)))
+abline(lm(I(wtherm-btherm) ~ pslave1860, weights = sample.size.bt, data = subset(nes.counties, state.abb %in% st.list)), lwd = 2, col = "#AA0000")
+
+```
+
+
+```{r}
+### Regressions results and tables.
+
+# Regress democratic affiliation (self-reported) dummy on slaveholding proportion
+# in 1860 (the key variable of interest) with WLS (weighted least squares). This
+# is used when the standard deviation of the error term is not constant over all
+# values of the predictors (i.e., heteroskedastistic). It effectively reduces the
+# predictive power of observations in the regression that are more uncertain.
+
+cnty.res <- lm(dem ~ pslave1860, data = south.counties, weights = sample.size)
+
+# Now with state fixed effects.
+
+cnty.res.fe <- lm(dem ~ pslave1860 + state.abb, data = south.counties, weights = sample.size)
+
+# Regressions on base1860.form include: county area  in 2000, latitude and longitude (and squared), "ruggedness."
+# 1860 variables: Gini coefficients on land holdings, small farm proportions, log population, log farm value,
+# proportion free blacks, rail access, waterway access, and state fixed effects.
+
+# Regress democratic affiliation on all of these variables (using the "update" function to update the model).
+
+cnty.res.full <- lm(update(base1860.form, dem ~ .), data = south.counties, weights = sample.size)
+
+# Regress affirmative action dummy on the proportion of slaves.
+
+cnty.aff <- lm(affirm ~ pslave1860, data = south.counties, weights = sample.size)
+
+# With state fixed effects.
+
+cnty.aff.fe <- lm(affirm ~ pslave1860 + state.abb, data = south.counties, weights = sample.size)
+
+# Regress affirmative action dummy on the many predictors listed above.
+
+cnty.aff.full <- lm(update(base1860.form, affirm ~ .), data = south.counties, weights = sample.size)
+
+# Regress average of the two CCES racial resentment questions on the proportion of slaves.
+
+cnty.resent <- lm(resent ~ pslave1860, data = south.counties, weights = sample.size.res)
+
+# With state fixed effects.
+
+cnty.resent.fe <- lm(resent ~ pslave1860 +  state.abb, data = south.counties, weights = sample.size.res)
+
+# Regress average resentment questions on the many predictors listed above.
+
+cnty.resent.full <- lm(update(base1860.form, resent ~ .), data = south.counties, weights = sample.size.res)
+
+
+## National Election Survey Individual Results
+
+# Regress the thermometer difference (white therm - black therm) on the proportion enslaved with WLS.
+# Also get robust standard errors, which is a way to obtain unbiased standard errors of 
+# coefficients under heteroscedasticity.
+
+therm.mod <- lm(therm.diff ~ pslave1860, data = ns.whites, weights = weight)
+therm.mod.rse <- robust.se(therm.mod, clvar = "fips")
+
+therm.mod.fe <- lm(therm.diff ~ pslave1860 + state.abb*as.factor(year), data = ns.whites, weights = weight)
+therm.mod.fe.rse <- robust.se(therm.mod.fe, clvar = "fips")
+
+therm.1860 <- lm(update(base1860.form, therm.diff ~ . + state.abb*as.factor(year)), data = ns.whites, weights = weight)
+therm.1860.rse <- robust.se(therm.1860, clvar = "fips")
+
+```
+
